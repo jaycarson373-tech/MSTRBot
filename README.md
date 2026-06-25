@@ -1,60 +1,42 @@
-# MicroTragedy Hyperliquid Worker
+# MicroTragedy Fee Claim Worker
 
-Railway worker that checks the Hyperliquid spot wallet every 15 minutes, market-sells spot SOL into USDC when the configured threshold is met, then moves available USDC from the spot wallet to the perp wallet.
+Railway worker for MicroTragedy SOL fee claiming and treasury sweeps.
 
-This worker is intentionally narrow:
+## What It Does
 
-- Assumes SOL is already inside the Hyperliquid spot wallet.
-- Does not touch a Solana wallet.
-- Does not open any MSTR short.
-- Defaults to `DRY_RUN=true`.
-- Never sells more than `MAX_SWAP_USD_PER_RUN`.
-- Never transfers the full USDC spot balance; it leaves `USDC_TO_PERP_BUFFER`.
-- Has a single-run lock so overlapping intervals cannot double-send.
-- Retries Hyperliquid API failures with backoff.
+Every `INTERVAL_MINUTES`:
 
-## Files
+1. Calls `claimFeesIfNeeded()`.
+2. Checks the fee wallet SOL balance.
+3. Leaves `0.01 SOL` in the fee wallet for gas.
+4. Sweeps only if `balance - 0.01 >= MIN_SWEEP_SOL`.
+5. Sends the available sweep amount to `TREASURY_SOL_WALLET`.
 
-- `src/config.ts` loads and validates env vars.
-- `src/hyperliquid.ts` contains Hyperliquid balance, price, spot sell, and spot-to-perp transfer helpers.
-- `src/index.ts` runs the interval worker.
+This worker never trades and does not connect to Hyperliquid.
 
-## Environment Variables
+The fee claim implementation is currently a placeholder:
 
-```env
-HYPERLIQUID_PRIVATE_KEY=
-HYPERLIQUID_ADDRESS=
-HYPERLIQUID_API_URL=https://api.hyperliquid.xyz
-HYPERLIQUID_CHAIN=Mainnet
-SIGNATURE_CHAIN_ID=0xa4b1
-MIN_SWAP_USD=25
-MAX_SWAP_USD_PER_RUN=250
-USDC_TO_PERP_BUFFER=1
+```ts
+async function claimFeesIfNeeded(): Promise<string | null> {
+  // TODO: plug in real fee-claim instruction/API here
+  // Return tx signature if claim happened, otherwise null
+}
+```
+
+## Env Vars
+
+Set these in Railway:
+
+```bash
+RPC_URL=
+FEE_CLAIM_PRIVATE_KEY_BASE58=
+TREASURY_SOL_WALLET=
+MIN_SWEEP_SOL=0.15
 INTERVAL_MINUTES=15
 DRY_RUN=true
 ```
 
-`HYPERLIQUID_PRIVATE_KEY` must be the Hyperliquid signer/API wallet private key. Do not commit it.
-
-## Railway Setup
-
-1. Create a new Railway service from this repo.
-2. Set the env vars above in Railway.
-3. Keep `DRY_RUN=true` for the first deploy.
-4. Set the start command to:
-
-```bash
-pnpm start
-```
-
-5. Watch logs. You should see the spot SOL balance, SOL price, planned sell amount, and planned USDC spot-to-perp transfer.
-6. After logs look correct, set:
-
-```env
-DRY_RUN=false
-```
-
-7. Redeploy.
+`FEE_CLAIM_PRIVATE_KEY_BASE58` can be a base58-encoded 64-byte Solana secret key or a 32-byte seed.
 
 ## Local Development
 
@@ -63,15 +45,47 @@ pnpm install
 pnpm dev
 ```
 
-## Behavior
+Build locally:
 
-On each run:
+```bash
+pnpm build
+pnpm start
+```
 
-1. Reads the Hyperliquid spot balances.
-2. Finds the SOL-like spot token (`SOL` or `USOL`) and its USDC market.
-3. Skips if estimated SOL value is below `MIN_SWAP_USD`.
-4. Sells at most `MAX_SWAP_USD_PER_RUN` worth of spot SOL using an IOC order.
-5. Checks spot USDC after the sell.
-6. Transfers `spot USDC - USDC_TO_PERP_BUFFER` to the perp wallet.
+## Railway Setup
 
-If `DRY_RUN=true`, the worker only logs what it would do and never signs or sends.
+1. Create a new Railway service from this repo/folder.
+2. Set all env vars in Railway.
+3. Use this start command:
+
+```bash
+pnpm start
+```
+
+4. Deploy with:
+
+```bash
+DRY_RUN=true
+```
+
+5. Watch logs for:
+   - fee wallet public key
+   - current SOL balance
+   - available sweep amount
+   - below-threshold skips
+   - dry-run sweep previews
+
+6. Only after logs look correct, set:
+
+```bash
+DRY_RUN=false
+```
+
+## Safety Notes
+
+- Private keys must only live in env vars.
+- The worker has an in-memory in-flight guard so overlapping runs are skipped.
+- The worker attempts claim once and sweep once per run.
+- RPC calls retry with exponential backoff.
+- The sweep never sends 100% of wallet balance; it always leaves `0.01 SOL`.
+- Keep `DRY_RUN=true` until the real claim integration is plugged in and verified.
